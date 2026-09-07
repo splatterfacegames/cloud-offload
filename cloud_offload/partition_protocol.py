@@ -49,6 +49,67 @@ def validate_boundary_type(type_name: str) -> None:
         )
 
 
+
+MESH_FIELDS = (
+    "vertices", "faces", "uvs", "vertex_colors", "texture", "metallic_roughness",
+    "vertex_counts", "face_counts", "unlit", "normals", "tangents", "normal_map",
+    "occlusion_in_mr", "material", "emissive",
+)
+CAMERA_FIELDS = ("elevs", "azims", "weights", "ortho_scale", "camera_distance", "near", "far")
+
+
+def _native_geometry_type(kind):
+    # These are fixed imports, never module or class names supplied by a bundle.
+    if kind == "mesh.v1":
+        from comfy_api.latest._util.geometry_types import MESH
+        return MESH, MESH_FIELDS
+    from comfy.ldm.hunyuan3d.paint.render import Cameras
+    return Cameras, CAMERA_FIELDS
+
+
+def _validate_native_geometry(kind, fields):
+    import math
+    import torch
+
+    expected = MESH_FIELDS if kind == "mesh.v1" else CAMERA_FIELDS
+    if not isinstance(fields, dict) or set(fields) != set(expected):
+        raise PartitionProtocolError("Invalid native geometry fields")
+    if kind == "mesh.v1":
+        for name in MESH_FIELDS:
+            value = fields[name]
+            if name in {"unlit", "occlusion_in_mr"}:
+                if type(value) is not bool:
+                    raise PartitionProtocolError("Invalid mesh flag")
+            elif name == "material":
+                if value is not None and not isinstance(value, dict):
+                    raise PartitionProtocolError("Invalid mesh material")
+            elif value is not None and not isinstance(value, torch.Tensor):
+                raise PartitionProtocolError("Invalid mesh tensor")
+        for name in ("vertices", "faces"):
+            value = fields[name]
+            if not isinstance(value, torch.Tensor) or value.ndim != 3 or value.shape[-1] != 3:
+                raise PartitionProtocolError("Invalid mesh geometry shape")
+        if fields["vertices"].shape[0] != fields["faces"].shape[0]:
+            raise PartitionProtocolError("Mismatched mesh batches")
+        if (fields["vertex_counts"] is None) != (fields["face_counts"] is None):
+            raise PartitionProtocolError("Incomplete mesh counts")
+    else:
+        for name in ("elevs", "azims", "weights"):
+            value = fields[name]
+            if not isinstance(value, list) or not 1 <= len(value) <= 6:
+                raise PartitionProtocolError("Invalid paint camera count")
+            if not all(type(x) in (float, int) and math.isfinite(x) for x in value):
+                raise PartitionProtocolError("Invalid paint camera value")
+        if len({len(fields[name]) for name in ("elevs", "azims", "weights")}) != 1:
+            raise PartitionProtocolError("Mismatched paint camera arrays")
+        for name in CAMERA_FIELDS[3:]:
+            value = fields[name]
+            if type(value) not in (float, int) or not math.isfinite(value) or value <= 0:
+                raise PartitionProtocolError("Invalid paint camera projection")
+        if fields["near"] >= fields["far"]:
+            raise PartitionProtocolError("Invalid paint camera clipping planes")
+
+
 class _Encoder:
     def __init__(self) -> None:
         self.tensors: dict[str, Any] = {}
@@ -87,6 +148,17 @@ class _Encoder:
             name = f"tensor-{len(self.tensors):08d}"
             self.tensors[name] = value.detach().to(device="cpu").contiguous()
             return {"kind": "tensor", "tensor": name}
+        native_kind = {
+            ("comfy_api.latest._util.geometry_types", "MESH"): "mesh.v1",
+            ("comfy.ldm.hunyuan3d.paint.render", "Cameras"): "paint-cameras.v1",
+        }.get((type(value).__module__, type(value).__name__))
+        if native_kind:
+            native_type, names = _native_geometry_type(native_kind)
+            if type(value) is not native_type:
+                raise PartitionProtocolError("Unrecognized native geometry class")
+            fields = {name: getattr(value, name) for name in names}
+            _validate_native_geometry(native_kind, fields)
+            return {"kind": native_kind, "fields": self.encode(fields, depth + 1)}
         if isinstance(value, list):
             return {"kind": "list", "items": [self.encode(item, depth + 1) for item in value]}
         if isinstance(value, tuple):
@@ -128,6 +200,11 @@ def _decode(
         if name not in tensors:
             raise PartitionProtocolError(f"Missing declared tensor: {name}")
         return tensors[name]
+    if kind in {"mesh.v1", "paint-cameras.v1"}:
+        fields = _decode(node.get("fields") or {}, tensors, blobs, depth + 1)
+        _validate_native_geometry(kind, fields)
+        native_type, _ = _native_geometry_type(kind)
+        return native_type(**fields)
     if kind in {"list", "tuple"}:
         values = [_decode(item, tensors, blobs, depth + 1) for item in node.get("items", [])]
         return values if kind == "list" else tuple(values)
