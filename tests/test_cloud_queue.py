@@ -1100,6 +1100,23 @@ def test_claim_jobs_matches_normalized_gpu_name(tmp_path):
     assert [item.id for item in claimed] == [job.id]
 
 
+@pytest.mark.parametrize("gpu_name,vram,claims", [
+    ("NVIDIA H100 80GB HBM3", 79.6, True),
+    ("H100 SXM", 80, True),
+    ("NVIDIA H100 PCIe", 80, False),
+    ("NVIDIA H200", 141, False),
+    ("NVIDIA H100 80GB HBM3", 78, False),
+])
+def test_runpod_h100_catalog_name_matches_driver_without_widening_gpu_constraint(tmp_path, gpu_name, vram, claims):
+    queue = JobQueue(tmp_path / "queue.db")
+    job = queue.create("comfyui-partition-v1", "input.part", provider="runpod",
+                       params={"gpu_type": "H100 SXM", "min_gpu_ram_gb": 80},
+                       status=JobStatus.QUEUED)
+    result = queue.claim_jobs("worker-japan", provider="runpod", models=["comfyui-partition-v1"],
+                              gpu_name=gpu_name, gpu_vram_gb=vram)
+    assert [item.id for item in result] == ([job.id] if claims else [])
+
+
 def test_prepared_job_can_only_be_claimed_by_its_confirmed_volume(tmp_path):
     queue = JobQueue(tmp_path / "queue.db")
     job = queue.create(

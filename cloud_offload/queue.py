@@ -21,6 +21,16 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def _canonical_gpu_name(value: str | None) -> str:
+    name = str(value or "").lower().replace("_", " ").replace("-", " ")
+    # RunPod's catalog display name differs from the CUDA driver name for
+    # this card. Preserve specific GPU matching and the separate VRAM check.
+    return {
+        "h100 sxm": "nvidia h100 80gb hbm3",
+        "nvidia h100 sxm": "nvidia h100 80gb hbm3",
+    }.get(name, name)
+
+
 # What a worker may report about itself. ``starting`` is a runner that has told
 # the coordinator it exists but is still bringing ComfyUI up, and ``failed`` is
 # one that never managed to; only the first two are a worker the dispatcher can
@@ -2027,13 +2037,14 @@ class JobQueue:
             if gpu_name:
                 # Treat "any"/missing as unconstrained. Normalizing separators makes
                 # provider labels such as RTX_4090 match NVIDIA GeForce RTX 4090.
+                conn.create_function("canonical_gpu_name", 1, _canonical_gpu_name, deterministic=True)
                 gpu_clause += """
                     AND (
                         COALESCE(lower(json_extract(params, '$.gpu_type')), 'any') = 'any'
-                        OR replace(replace(lower(?), '_', ' '), '-', ' ')
-                           LIKE '%' || replace(replace(
-                               lower(json_extract(params, '$.gpu_type')), '_', ' '
-                           ), '-', ' ') || '%'
+                        OR canonical_gpu_name(?)
+                           LIKE '%' || canonical_gpu_name(
+                               json_extract(params, '$.gpu_type')
+                           ) || '%'
                     )
                 """
                 values.append(str(gpu_name))
