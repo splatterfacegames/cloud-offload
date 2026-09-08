@@ -2704,3 +2704,25 @@ def test_cli_validation_redacts_request_and_run_requires_spend_confirmation(
 
     assert hook_stopped.value.code == 2
     assert "--allow-hooks" in capsys.readouterr().err
+
+
+def test_nonexclusive_ready_worker_can_execute_beyond_readiness_deadline():
+    class ReadyDriver(FakeDriver):
+        def active_workers(self, providers):
+            if self.current_job is None:
+                return []
+            return [{"worker_id": "worker-current", "instance_id": "pod-current",
+                     "provider": "runpod", "status": "active",
+                     "lease_id": "lease-pod-current"}]
+
+    script = successful_script("pod-current")
+    script.steps.insert(1, {"snapshot": {"status": "running"},
+                           "events": [], "instances": [{"id": "pod-current"}]})
+    value = plan_dict([scenario("cold", "cold")],
+                      runner_readiness_timeout_seconds=1)
+    value["exclusive"] = False
+    driver = ReadyDriver({"cold": script})
+    result = BenchmarkRunner(driver).run(BenchmarkPlan.from_dict(value))["results"][0]
+    assert result["limit_triggered"] is None
+    assert result["startup_phases"]["comfyui_readiness"]["state"] == "confirmed"
+    assert not driver.cancelled

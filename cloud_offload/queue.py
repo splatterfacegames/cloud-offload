@@ -2521,9 +2521,26 @@ class JobQueue:
                 """,
                 parameters,
             ).fetchall()
+            lease_rows = conn.execute(
+                """
+                SELECT worker_id, provider, instance_id, id
+                FROM job_leases
+                WHERE status = 'active' AND worker_id IS NOT NULL
+                  AND instance_id IS NOT NULL
+                """
+            ).fetchall()
+        # Publish only an unambiguous, currently active durable lease binding.
+        bindings: dict[tuple[str, str], list[tuple[str, str]]] = {}
+        for worker_id, provider, instance_id, lease_id in lease_rows:
+            bindings.setdefault((worker_id, provider), []).append((instance_id, lease_id))
+        identities = {
+            key: {"instance_id": values[0][0], "lease_id": values[0][1]}
+            for key, values in bindings.items() if len(values) == 1
+        }
         now = utc_now()
         return [
             {
+                **identities.get((row[0], row[1]), {}),
                 "worker_id": row[0],
                 "provider": row[1],
                 "status": row[2],

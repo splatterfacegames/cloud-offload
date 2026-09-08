@@ -1969,3 +1969,21 @@ def test_a_pod_is_not_killed_as_idle_while_its_own_work_is_queued(tmp_path):
     dispatcher._check_idle_workers()
 
     assert "pod-1" in dispatcher.active_instances
+
+
+def test_worker_status_exposes_only_unambiguous_active_lease_identity(tmp_path):
+    queue = JobQueue(tmp_path / "queue.db")
+    queue.record_worker("worker-current", "runpod")
+    lease = queue.create_lease(provider="runpod", runtime_profile="comfyui")
+    queue.bind_lease(lease.id, "pod-current", worker_id="worker-current")
+    worker = queue.list_active_workers()[0]
+    assert worker["instance_id"] == "pod-current"
+    assert worker["lease_id"] == lease.id
+
+    other = queue.create_lease(provider="runpod", runtime_profile="comfyui")
+    queue.bind_lease(other.id, "pod-other", worker_id="worker-current")
+    assert "lease_id" not in queue.list_active_workers()[0]
+    queue.request_lease_revocation(other.id, "test")
+    assert queue.list_active_workers()[0]["lease_id"] == lease.id
+    queue.request_lease_revocation(lease.id, "test")
+    assert "instance_id" not in queue.list_active_workers()[0]

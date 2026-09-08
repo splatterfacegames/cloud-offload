@@ -1035,7 +1035,8 @@ class BenchmarkRunner:
                 now = self.driver.monotonic()
                 elapsed = now - started
                 readiness_deadline = (
-                    started + plan.limits.runner_readiness_timeout_seconds
+                    float("inf") if _runner_is_ready(startup_phases)
+                    else started + plan.limits.runner_readiness_timeout_seconds
                 )
                 scenario_deadline = started + scenario.timeout_seconds
                 campaign_deadline = (
@@ -1044,16 +1045,17 @@ class BenchmarkRunner:
                 operation_deadline = min(
                     readiness_deadline, scenario_deadline, campaign_deadline
                 )
-                if now >= operation_deadline:
-                    limit_triggered = (
-                        "runner_readiness_timeout"
-                        if readiness_deadline <= min(scenario_deadline, campaign_deadline)
-                        else (
-                            "scenario_timeout"
-                            if scenario_deadline <= campaign_deadline
-                            else "campaign_runtime_limit"
-                        )
+                operation_limit = (
+                    "runner_readiness_timeout"
+                    if readiness_deadline <= min(scenario_deadline, campaign_deadline)
+                    else (
+                        "scenario_timeout"
+                        if scenario_deadline <= campaign_deadline
+                        else "campaign_runtime_limit"
                     )
+                )
+                if now >= operation_deadline:
+                    limit_triggered = operation_limit
                     self.driver.cancel(job_id)
                     break
                 new_events = self._deadline_call(
@@ -1173,7 +1175,7 @@ class BenchmarkRunner:
                         }
 
                 if self.driver.monotonic() >= operation_deadline:
-                    limit_triggered = "runner_readiness_timeout"
+                    limit_triggered = operation_limit
                     self.driver.cancel(job_id)
                     break
 
@@ -1238,7 +1240,7 @@ class BenchmarkRunner:
                                 )
 
                 if self.driver.monotonic() >= operation_deadline:
-                    limit_triggered = "runner_readiness_timeout"
+                    limit_triggered = operation_limit
                     self.driver.cancel(job_id)
                     break
 
@@ -1258,7 +1260,7 @@ class BenchmarkRunner:
                     identities,
                 )
                 if self.driver.monotonic() >= operation_deadline:
-                    limit_triggered = "runner_readiness_timeout"
+                    limit_triggered = operation_limit
                     self.driver.cancel(job_id)
                     break
 
@@ -1308,7 +1310,7 @@ class BenchmarkRunner:
                 )
                 status = str(snapshot.get("status") or "")
                 if self.driver.monotonic() >= operation_deadline:
-                    limit_triggered = "runner_readiness_timeout"
+                    limit_triggered = operation_limit
                     self.driver.cancel(job_id)
                     break
                 if scenario.failure and failure_result is None:
@@ -1324,7 +1326,8 @@ class BenchmarkRunner:
                 if status in TERMINAL_STATUSES:
                     break
                 readiness_deadline = (
-                    started + plan.limits.runner_readiness_timeout_seconds
+                    float("inf") if _runner_is_ready(startup_phases)
+                    else started + plan.limits.runner_readiness_timeout_seconds
                 )
                 scenario_deadline = started + scenario.timeout_seconds
                 campaign_deadline = (
