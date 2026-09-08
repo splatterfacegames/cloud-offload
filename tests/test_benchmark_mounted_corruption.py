@@ -33,7 +33,8 @@ def mounted_fixture(tmp_path):
     return cache, manifest, artifact
 
 
-def test_mounted_canary_requires_explicit_enablement(tmp_path):
+def test_mounted_canary_requires_explicit_enablement(tmp_path, monkeypatch):
+    monkeypatch.delenv(ENABLED_ENV, raising=False)
     cache, manifest, artifact = mounted_fixture(tmp_path)
     assert inject(cache, manifest) is None
     assert not cache._resolve(artifact["storage_key"]).exists()
