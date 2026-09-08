@@ -15,6 +15,13 @@ RUN python -c "import torch, torchvision, torchaudio; assert (torch.__version__,
         torch==2.11.0+cu128 torchvision==0.26.0+cu128 torchaudio==2.11.0+cu128 \
         --index-url https://download.pytorch.org/whl/cu128
 
+# Conda package caches and bundled workflow example media are not needed by
+# the API worker. Remove them before COPY so they never enter a shipped layer.
+# ComfyUI explicitly handles absent template/docs packages; retain its frontend
+# package and every model-execution dependency.
+COPY deploy/runtime-profiles/comfyui/prune-runtime.py /tmp/prune-runtime.py
+RUN python /tmp/prune-runtime.py
+
 # A monolithic Conda tree requires one long serial download before a rented
 # worker can start. Repack its largest libraries into independent layers.
 # Container runtimes can pull these layers in parallel.
@@ -77,7 +84,8 @@ RUN git clone --filter=blob:none "${COMFYUI_REPOSITORY}" /opt/ComfyUI \
     && git -C /opt/ComfyUI checkout --detach "${COMFYUI_REVISION}"
 
 COPY deploy/runtime-profiles/comfyui/runtime-constraints.txt /opt/cloud-offload/runtime-constraints.txt
-RUN python -m pip install --no-cache-dir -r /opt/ComfyUI/requirements.txt \
+RUN python -c "from pathlib import Path; lines=Path('/opt/ComfyUI/requirements.txt').read_text().splitlines(); Path('/opt/cloud-offload/worker-requirements.txt').write_text('\n'.join(line for line in lines if not line.startswith(('comfyui-workflow-templates', 'comfyui-embedded-docs'))) + '\n')" \
+    && python -m pip install --no-cache-dir -r /opt/cloud-offload/worker-requirements.txt \
     -c /opt/cloud-offload/runtime-constraints.txt
 
 COPY . /opt/cloud-offload/source

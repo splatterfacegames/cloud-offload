@@ -30,6 +30,12 @@ and origin recovery. The hook requires worker cleanup evidence and restores the
 original inventory. Use a separate campaign-owned volume; never inject faults
 into an existing user volume. Keep this flag unset for ordinary operation.
 
+The worker image omits Conda installation caches and ComfyUI's optional workflow
+example media and embedded documentation. These are browser resources, not graph
+execution dependencies. Keep the frontend package and model runtime libraries;
+verify native GPU inference and boundary codecs after changing image contents.
+An image already cached by the provider does not prove uncached pull readiness.
+
 - **A healthy local coordinator.** Start it with `cloud-offload serve`. The
   release runner discovers it through the service-discovery file or the
   `CLOUD_OFFLOAD_URL` environment variable and refuses to start when the
