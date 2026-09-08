@@ -1267,6 +1267,75 @@ def test_corruption_hook_runs_only_after_a_successful_cold_base_manifest():
     assert [kind for kind, _ in driver.hooks] == ["corruption", "corruption"]
 
 
+def test_corruption_uses_verified_hot_manifest_when_cold_storage_is_off():
+    class PreparedDriver(FakeDriver):
+        def base_manifest(self, result):
+            return {"manifest_id": "verified-hot-manifest"} if result["cache_state"] == "hot" else None
+
+    plan = BenchmarkPlan.from_dict(plan_dict([
+        scenario("cold", "cold"),
+        scenario("hot", "hot"),
+        scenario("corruption", "failure", failure={
+            "kind": "corruption", "before_submit": True, "trigger_event": "executed",
+            "hook_argv": ["corruption-canary"],
+        }),
+    ]))
+    driver = PreparedDriver({name: successful_script("pod-" + name) for name in ("cold", "hot", "corruption")})
+    scorecard = BenchmarkRunner(driver).run(plan)
+    assert all(result["passed"] for result in scorecard["results"]), scorecard["results"]
+    assert [kind for kind, _ in driver.hooks] == ["corruption"] * 3
+
+
+@pytest.mark.parametrize("drift", [None, "miss", "volume", "manifest", "digest", "image", "incomplete"])
+def test_hot_base_manifest_requires_completed_restore_evidence(drift):
+    driver = CoordinatorBenchmarkDriver("http://127.0.0.1:11435", None, CloudConfig(), ())
+    digest = "sha256:" + "a" * 64
+    manifest_id = "sha256:" + "b" * 64
+    image = "sha256:" + "c" * 64
+    profile = "sha256:" + "d" * 64
+    job = {"id": "hot", "status": "completed", "model": "comfyui-partition-v1", "params": {
+        "lease_id": "hot-lease", "cache_volume_id": "volume", "cache_datacenter_id": "AP-JP-1",
+        "cache_manifest_id": manifest_id,
+    }}
+    manifest = {"manifest_id": manifest_id, "volume_id": "volume", "datacenter_id": "AP-JP-1",
+        "profile_fingerprint": profile, "created_at": "2026-08-01T00:00:00+00:00",
+        "producer": {"job_id": "warmup", "lease_id": "warmup-lease", "image_digest": image,
+                     "cloud_offload_version": "test"},
+        "artifacts": [{"digest": digest, "size": 10}],
+    }
+    receipt = {"manifest_id": manifest_id, "volume_id": "volume", "datacenter_id": "AP-JP-1",
+        "artifacts": [{"digest": digest, "result": "hit", "bytes": 10}],
+    }
+    if drift == "miss":
+        receipt["artifacts"][0]["result"] = "miss"
+    elif drift == "volume":
+        receipt["volume_id"] = "other"
+    elif drift == "manifest":
+        receipt["manifest_id"] = "other"
+    elif drift == "digest":
+        receipt["artifacts"][0]["digest"] = "other"
+    elif drift == "image":
+        manifest["producer"]["image_digest"] = "other"
+    elif drift == "incomplete":
+        job["status"] = "running"
+
+    def request(method, path, **kwargs):
+        if path == "/api/jobs/hot":
+            return FakeResponse(job)
+        if path == "/api/cache/manifests":
+            return FakeResponse({"manifests": [manifest]})
+        assert path == "/api/jobs/hot/events"
+        return FakeResponse({"events": [{"event": {"type": "cache_restore_completed", "receipt": receipt}}]})
+
+    driver._request = request
+    result = driver.base_manifest({"job_id": "hot", "cache_state": "hot",
+        "started_at": "2026-08-01T00:01:00+00:00", "submission_receipt": {
+            "region": "AP-JP-1", "allowed_regions": ["AP-JP-1"], "image_digest": image,
+            "profile_fingerprint": profile, "expected_model": "comfyui-partition-v1",
+        }})
+    assert bool(result) is (drift is None)
+
+
 def test_corruption_requires_registry_manifest_identity_after_cold_pass(tmp_path):
     class RegistryDriver(FakeDriver):
         def __init__(self, scripts, registry):

@@ -717,7 +717,7 @@ class BenchmarkRunner:
         campaign_abort: str | None = (
             "campaign_runtime_limit" if baseline_error else None
         )
-        cold_base_manifest_ready = False
+        base_manifest_ready = False
         for scenario in plan.scenarios:
             if campaign_abort is not None:
                 break
@@ -736,7 +736,7 @@ class BenchmarkRunner:
             if (
                 scenario.failure
                 and scenario.failure.kind == "corruption"
-                and not cold_base_manifest_ready
+                and not base_manifest_ready
             ):
                 result = self._dependent_failure_result(
                     scenario,
@@ -751,7 +751,9 @@ class BenchmarkRunner:
                     estimated_total,
                 )
             results.append(result)
-            if scenario.cache_state == "cold":
+            if scenario.cache_state in {"cold", "hot"}:
+                if scenario.cache_state == "cold":
+                    base_manifest_ready = False
                 base_manifest = None
                 if result.get("passed"):
                     checker = getattr(self.driver, "base_manifest", None)
@@ -761,8 +763,8 @@ class BenchmarkRunner:
                         except Exception:  # noqa: BLE001 - absent registry proof fails closed
                             base_manifest = None
                     result["base_manifest_identity"] = base_manifest
-                cold_base_manifest_ready = bool(result.get("passed")) and bool(
-                    base_manifest
+                base_manifest_ready = base_manifest_ready or (
+                    bool(result.get("passed")) and bool(base_manifest)
                 )
             estimated_total += float(result["estimated_compute_cost_upper_usd"])
             if result.get("orphaned_resources"):
@@ -2363,7 +2365,7 @@ class CoordinatorBenchmarkDriver:
         return response.json()
 
     def base_manifest(self, cold_result: dict[str, Any]) -> dict[str, Any] | None:
-        """Return the exact cache-registry manifest created by the cold run."""
+        """Verify a registry manifest published or successfully restored by this run."""
         receipt = cold_result.get("submission_receipt") or {}
         job_id = str(cold_result.get("job_id") or "")
         if not job_id:
@@ -2420,23 +2422,44 @@ class CoordinatorBenchmarkDriver:
         )
         response.raise_for_status()
         manifests = response.json().get("manifests") or []
+        restored: dict[str, set[str]] = {}
+        if cold_result.get("cache_state") == "hot" and job.get("status") == "completed":
+            for envelope in self.events(job_id, after=0):
+                event = envelope.get("event") or {}
+                receipt = event.get("receipt") or {}
+                restored_id = str(receipt.get("manifest_id") or "")
+                if (
+                    event.get("type") == "cache_restore_completed"
+                    and restored_id == str(params.get("cache_manifest_id") or "")
+                    and receipt.get("volume_id") == volume_id
+                    and receipt.get("datacenter_id") == region
+                ):
+                    hits = {
+                        str(item.get("digest"))
+                        for item in receipt.get("artifacts") or []
+                        if item.get("result") == "hit" and int(item.get("bytes") or 0) > 0
+                    }
+                    if restored_id and hits:
+                        restored.setdefault(restored_id, set()).update(hits)
         candidates = []
         for manifest in manifests:
             created_at = _parse_timestamp(manifest.get("created_at"))
-            if (
-                started_at is not None
-                and (created_at is None or created_at <= started_at)
-            ):
-                continue
             manifest_id = str(manifest.get("manifest_id") or "")
             producer = manifest.get("producer") or {}
+            published_here = (
+                str(producer.get("job_id") or "") == job_id
+                and str(producer.get("lease_id") or "") == lease_id
+                and (started_at is None or (created_at is not None and created_at > started_at))
+            )
+            restored_here = bool(restored.get(manifest_id)) and restored[manifest_id].issubset(
+                {str(item.get("digest")) for item in manifest.get("artifacts") or []}
+            )
             if (
                 not manifest_id
                 or str(manifest.get("volume_id") or "") != volume_id
                 or str(manifest.get("datacenter_id") or "") != region
                 or str(manifest.get("profile_fingerprint") or "") != profile_fingerprint
-                or str(producer.get("job_id") or "") != job_id
-                or str(producer.get("lease_id") or "") != lease_id
+                or not (published_here or restored_here)
                 or str(producer.get("image_digest") or "") != image_digest
                 or not str(producer.get("cloud_offload_version") or "")
                 or not manifest.get("artifacts")

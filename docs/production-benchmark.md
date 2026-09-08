@@ -88,6 +88,12 @@ A plan uses `cloud-offload.benchmark-plan.v1`:
 }
 ```
 
+Corruption requires a manifest verified against the cache registry after a
+successful run. A hot run can establish this dependency through its completed
+restore receipt: the manifest, volume, region, runtime image, and restored
+artifact digests must match. A storage-disabled cold run need not publish a
+prepared manifest.
+
 Cold and hot scenarios must begin cold and alternate. A cold scenario must set
 `prepared_storage_policy: off`; a hot scenario must select `smart`, `strict`, or
 `pinned`. This makes the cache-state label an enforced control rather than a
