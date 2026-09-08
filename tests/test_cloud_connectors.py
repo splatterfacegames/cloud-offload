@@ -315,7 +315,8 @@ def test_runpod_storage_placement_rejects_unknown_datacenter():
         )
 
 
-def test_runpod_launch_passes_worker_environment_and_startup_script():
+@pytest.mark.parametrize("min_cuda_version", [None, "12.8"])
+def test_runpod_launch_passes_worker_environment_and_startup_script(min_cuda_version):
     http = FakeHttp(
         FakeResponse({"id": "pod-1", "status": "PROVISIONING"}),
         FakeResponse(
@@ -350,6 +351,7 @@ def test_runpod_launch_passes_worker_environment_and_startup_script():
         "pytorch/image:latest",
         env_vars={"CLOUD_OFFLOAD_WORKER_MODE": "true"},
         startup_script="cloud-offload worker --poll 10\n",
+        min_cuda_version=min_cuda_version,
     )
 
     assert http.requests[0][0:2] == ("POST", "https://api.runpod.io/v2/pods")
@@ -357,7 +359,10 @@ def test_runpod_launch_passes_worker_environment_and_startup_script():
     encoded_script = pod_input["args"].split("echo ", 1)[1].split(" ", 1)[0]
     assert base64.b64decode(encoded_script).decode() == "cloud-offload worker --poll 10\n"
     assert pod_input["env"] == {"CLOUD_OFFLOAD_WORKER_MODE": "true"}
-    assert pod_input["gpu"] == {"id": "NVIDIA GeForce RTX 4090", "count": 1}
+    assert pod_input["gpu"] == {
+        "id": "NVIDIA GeForce RTX 4090", "count": 1,
+        **({"minCudaVersion": min_cuda_version} if min_cuda_version else {}),
+    }
     assert pod_input["image"] == "pytorch/image:latest"
     assert pod_input["cloud"] == "SECURE"
     assert pod_input["disk"] == 20

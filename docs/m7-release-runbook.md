@@ -12,6 +12,16 @@ and the underlying benchmark harness in
 
 ## Prerequisites
 
+The current campaign targets only RunPod `AP-JP-1` and H100 SXM 80 GB
+(`NVIDIA H100 80GB HBM3`). Declare one `comfyui` profile-region case and pin
+every paid scenario to Japan and this GPU. Keep the thirty consecutive full
+matrices and all reliability SLOs. Cold fallback must stay in Japan; unavailable
+Japan capacity must not trigger an overseas rental. Cross-region failure
+contracts run locally and do not expand the paid release scope. The historical
+three-region plans and ledgers are previous campaign evidence, not the current
+release scope. Generate a new plan and ledger with the final image and source
+pins before starting this campaign.
+
 - **A healthy local coordinator.** Start it with `cloud-offload serve`. The
   release runner discovers it through the service-discovery file or the
   `CLOUD_OFFLOAD_URL` environment variable and refuses to start when the

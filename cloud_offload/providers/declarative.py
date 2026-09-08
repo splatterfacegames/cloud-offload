@@ -863,6 +863,7 @@ class DeclarativeRestConnector(CloudConnector):
         disk_gb: int | None = None,
         placement: PlacementConstraints | None = None,
         resource_name: str | None = None,
+        min_cuda_version: str | None = None,
     ) -> Instance:
         """Launch an instance, optionally polling until it reports ready.
 
@@ -870,6 +871,8 @@ class DeclarativeRestConnector(CloudConnector):
         otherwise ignored: a provider whose launch payload has no place for a
         container disk keeps rendering exactly the request it rendered before.
         """
+        if min_cuda_version:
+            raise ValueError(f"{self._name} cannot enforce a minimum CUDA version")
         endpoint = self._endpoint("launch")
         where = f"{self._name}.launch"
         variables = self._variables(
