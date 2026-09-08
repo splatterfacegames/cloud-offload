@@ -251,6 +251,7 @@ def _corruption_target(
     declared_digests: set[str],
     canary_nonce: str | None = None,
     allowed_regions: set[str] | None = None,
+    require_s3: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     prepared = client.prepared_storage()
     provider_volume_id = str(prepared.get("existing_volume_id") or "")
@@ -266,11 +267,11 @@ def _corruption_target(
             for item in volumes
             if str(item.get("datacenter_id") or "") in normalized_regions
             and str(item.get("status") or "ready") in {"ready", "degraded"}
-            and item.get("s3_compatible")
+            and (item.get("s3_compatible") or not require_s3)
         ]
         if len(region_volumes) != 1:
             raise RuntimeError(
-                "Corruption canary requires one usable S3 volume in the allowed region"
+                "Corruption canary requires one accessible volume in the allowed region"
             )
         volume = region_volumes[0]
     else:
@@ -284,7 +285,7 @@ def _corruption_target(
             ),
             None,
         )
-    if not volume or not volume.get("s3_compatible"):
+    if not volume or (require_s3 and not volume.get("s3_compatible")):
         raise RuntimeError("Bound prepared volume has no S3 canary path")
 
     declared = {"sha256:" + normalize_digest(item) for item in declared_digests}
@@ -1099,6 +1100,10 @@ def run_fault(kind: str) -> dict[str, Any]:
             ).split(",")
             if item.strip()
         }
+        if os.environ.get("CLOUD_OFFLOAD_BENCHMARK_MOUNT_CORRUPTION") == "1":
+            from cloud_offload.benchmark_mounted_corruption import run_fault as run_mounted
+
+            return run_mounted(client, job_id, scenario, stage, declared, canary_nonce, allowed_regions)
         if stage == "prepare":
             profile_name = (
                 os.environ.get("CLOUD_OFFLOAD_BENCHMARK_PROFILE", "").strip()

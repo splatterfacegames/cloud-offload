@@ -87,6 +87,7 @@ CONTRACT_TEST_GROUPS: dict[str, tuple[str, ...]] = {
     "cache_recovery": (
         "tests/test_prepared_storage.py::test_exact_manifest_id_fetches_from_authority_when_mount_is_stale",
         "tests/test_prepared_storage.py::test_corrupt_profile_weight_is_quarantined_and_falls_back",
+        "tests/test_benchmark_mounted_corruption.py",
     ),
     "regional_fallback": (
         "tests/test_preflight.py::test_preflight_uses_two_compatible_replicas_and_keeps_cold_fallback",

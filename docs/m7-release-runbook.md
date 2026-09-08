@@ -22,6 +22,14 @@ three-region plans and ledgers are previous campaign evidence, not the current
 release scope. Generate a new plan and ledger with the final image and source
 pins before starting this campaign.
 
+Japan's mounted cache can run the corruption canary without an S3 endpoint.
+Set `CLOUD_OFFLOAD_BENCHMARK_MOUNT_CORRUPTION=1` in the campaign coordinator
+and hook environment. The worker verifies a signed synthetic-artifact claim,
+injects only that fresh artifact, and exercises normal verification, quarantine,
+and origin recovery. The hook requires worker cleanup evidence and restores the
+original inventory. Use a separate campaign-owned volume; never inject faults
+into an existing user volume. Keep this flag unset for ordinary operation.
+
 - **A healthy local coordinator.** Start it with `cloud-offload serve`. The
   release runner discovers it through the service-discovery file or the
   `CLOUD_OFFLOAD_URL` environment variable and refuses to start when the

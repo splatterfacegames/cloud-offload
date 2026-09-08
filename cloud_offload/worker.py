@@ -470,8 +470,9 @@ class Worker:
         # the graph's node types exist at all, and they are far the smaller
         # download, so a profile that is wrong about them fails fast.
         self._phase_event(job, "staging_started")
-        self._begin_cache_restore(job)
+        self._mounted_corruption_state = None
         try:
+            self._begin_cache_restore(job)
             self._stage_custom_nodes(job)
             self._raise_if_cancelled(job)
             self._stage_profile_weights(job)
@@ -2304,6 +2305,15 @@ class Worker:
         self.cache_authority.set_context(
             job_id=job.id, volume_id=self.cache_receipt.volume_id
         )
+        if os.environ.get("CLOUD_OFFLOAD_BENCHMARK_MOUNT_CORRUPTION") == "1":
+            from cloud_offload.benchmark_mounted_corruption import inject
+
+            manifest = self._selected_prepared_manifest()
+            if manifest:
+                self._mounted_corruption_state = inject(self.prepared_cache, manifest)
+                if self._mounted_corruption_state:
+                    self._cache_event(job, "benchmark_mounted_corruption_injected",
+                                      digest=self._mounted_corruption_state["digest"])
         healed, pending = self.prepared_cache.retry_pending_announcements()
         if healed or pending:
             self._cache_event(
@@ -2322,6 +2332,12 @@ class Worker:
         self._consume_boot_cache_hits(job)
 
     def _complete_cache_restore(self, job: Job) -> None:
+        if getattr(self, "_mounted_corruption_state", None):
+            from cloud_offload.benchmark_mounted_corruption import cleanup
+
+            result = cleanup(self.prepared_cache, self._mounted_corruption_state)
+            self._mounted_corruption_state = None
+            self._cache_event(job, "benchmark_mounted_corruption_cleaned", **result)
         if not getattr(self, "cache_receipt", None):
             self._active_cache_job = None
             return

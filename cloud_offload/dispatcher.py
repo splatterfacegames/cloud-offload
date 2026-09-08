@@ -682,6 +682,8 @@ class Dispatcher:
         }
         if profile.get("platform"):
             env_vars["CLOUD_OFFLOAD_WORKER_PLATFORM"] = profile["platform"]
+        if os.environ.get("CLOUD_OFFLOAD_BENCHMARK_MOUNT_CORRUPTION") == "1":
+            env_vars["CLOUD_OFFLOAD_BENCHMARK_MOUNT_CORRUPTION"] = "1"
         if profile.get("python_abi"):
             env_vars["CLOUD_OFFLOAD_WORKER_PYTHON_ABI"] = profile["python_abi"]
         if profile.get("weights"):
