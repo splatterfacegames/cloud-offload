@@ -69,12 +69,13 @@ def _native_geometry_type(kind):
 
 def _validate_native_geometry(kind, fields):
     import math
-    import torch
 
     expected = MESH_FIELDS if kind == "mesh.v1" else CAMERA_FIELDS
     if not isinstance(fields, dict) or set(fields) != set(expected):
         raise PartitionProtocolError("Invalid native geometry fields")
     if kind == "mesh.v1":
+        import torch
+
         for name in MESH_FIELDS:
             value = fields[name]
             if name in {"unlit", "occlusion_in_mr"}:
