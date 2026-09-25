@@ -329,6 +329,7 @@ class RunPodConnector(CloudConnector):
         disk_gb: int | None = None,
         placement: PlacementConstraints | None = None,
         resource_name: str | None = None,
+        min_cuda_version: str | None = None,
     ) -> Instance:
         """Launch a RunPod pod and wait until it reaches running state.
 
@@ -336,6 +337,9 @@ class RunPodConnector(CloudConnector):
         gets the configured default, which is what every launch used before
         partitions could be sized.
         """
+        from cloud_offload.profiles import normalized_cuda_version
+
+        min_cuda_version = normalized_cuda_version(min_cuda_version)
         self._ensure_image_pullable(docker_image)
         container_disk_gb = int(disk_gb) if disk_gb else self.container_disk_gb
         self._validate_cloud_placement(placement)
@@ -374,6 +378,8 @@ class RunPodConnector(CloudConnector):
             "ports": ["22/tcp"],
             "startSsh": True,
         }
+        if min_cuda_version:
+            pod_input["gpu"]["minCudaVersion"] = min_cuda_version
         if attachment:
             pod_input["mounts"] = {
                 "network": [

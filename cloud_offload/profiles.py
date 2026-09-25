@@ -62,6 +62,7 @@ def configured_worker_profiles(config: Any) -> dict[str, dict[str, Any]]:
             "providers": list(dict.fromkeys(providers)),
             "gpu_type": str(value.get("gpu_type") or "").strip(),
             "min_gpu_ram_gb": float(value.get("min_gpu_ram_gb") or 0),
+            "min_cuda_version": normalized_cuda_version(value.get("min_cuda_version")),
             "wheelhouse_url": str(value.get("wheelhouse_url") or ""),
             "wheelhouse_sha256": str(value.get("wheelhouse_sha256") or ""),
             "weights": normalized_profile_weights(str(name), value.get("weights")),
@@ -84,6 +85,13 @@ def configured_worker_profiles(config: Any) -> dict[str, dict[str, Any]]:
             ),
         }
     return result
+
+
+def normalized_cuda_version(value: Any) -> str:
+    version = str(value or "").strip()
+    if version and not re.fullmatch(r"[0-9]{1,2}\.[0-9]{1,2}", version):
+        raise ValueError("min_cuda_version must be a major.minor CUDA version")
+    return version
 
 
 def normalized_profile_runtime_identity(name: str, field: str, value: Any) -> str:

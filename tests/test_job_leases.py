@@ -334,6 +334,67 @@ def test_uncertain_launch_is_recovered_by_durable_resource_name(tmp_path):
     assert leases[0].status == "active"
 
 
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_japan_region_reaches_catalog_and_cold_launch(tmp_path, confirmed):
+    class JapanProvider(LeaseProvider):
+        def __init__(self):
+            super().__init__()
+            self.catalog_placements = []
+            self.launch_placements = []
+            self.cuda_versions = []
+
+        def list_available(self, **kwargs):
+            self.catalog_placements.append(kwargs.get("placement"))
+            return [{"id": "h100", "gpu_type": "H100 SXM", "gpu_ram_gb": 80,
+                     "hourly_rate": 3.49}]
+
+        def find_cheapest(self, **kwargs):
+            return self.list_available(**kwargs)[0]
+
+        def launch(self, **kwargs):
+            self.launch_placements.append(kwargs.get("placement"))
+            self.cuda_versions.append(kwargs.get("min_cuda_version"))
+            return super().launch(**kwargs)
+
+    config = lease_config(tmp_path, allowed_regions=["AP-JP-1"], max_hourly_rate=4)
+    config.worker_profiles["comfyui"]["min_cuda_version"] = "12.8"
+    queue = JobQueue(config.queue_db_path)
+    job = queued_job(queue)
+    job.params["gpu_type"] = "H100 SXM"
+    if confirmed:
+        job.params["preflight"] = {
+            "candidate_id": "japan-h100", "provider": "runpod", "offer_id": "h100",
+            "gpu_type": "H100 SXM", "gpu_ram_gb": 80, "hourly_rate": 3.49,
+            "region": "AP-JP-1", "request_policy": {"allowed_regions": ["AP-JP-1"]},
+        }
+    queue.update(job)
+    provider = JapanProvider()
+    instance = Dispatcher(config, queue=queue, provider=provider)._launch_worker(
+        "runpod", "comfyui", [job]
+    )
+    assert instance is not None
+    assert len(provider.launch_placements) == 1
+    assert provider.cuda_versions == ["12.8"]
+    for placement in provider.catalog_placements + provider.launch_placements:
+        assert placement.datacenter_ids == ("AP-JP-1",)
+        assert not placement.storage_attachments
+
+
+def test_conflicting_confirmed_region_refuses_launch_before_lease(tmp_path):
+    config = lease_config(tmp_path, allowed_regions=["AP-JP-1"])
+    queue = JobQueue(config.queue_db_path)
+    job = queued_job(queue)
+    job.params["preflight"] = {"provider": "runpod", "region": "US-MD-1"}
+    queue.update(job)
+    provider = LeaseProvider()
+    instance = Dispatcher(config, queue=queue, provider=provider)._launch_worker(
+        "runpod", "comfyui", [job]
+    )
+    assert instance is None
+    assert provider.launches == 0
+    assert queue.leases_for_job(job.id) == []
+
+
 def test_bound_launch_keeps_full_runner_registration_lease_window(
     tmp_path, monkeypatch
 ):

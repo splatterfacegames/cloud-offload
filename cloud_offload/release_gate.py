@@ -87,9 +87,13 @@ CONTRACT_TEST_GROUPS: dict[str, tuple[str, ...]] = {
     "cache_recovery": (
         "tests/test_prepared_storage.py::test_exact_manifest_id_fetches_from_authority_when_mount_is_stale",
         "tests/test_prepared_storage.py::test_corrupt_profile_weight_is_quarantined_and_falls_back",
+        "tests/test_benchmark_mounted_corruption.py",
     ),
     "regional_fallback": (
         "tests/test_preflight.py::test_preflight_uses_two_compatible_replicas_and_keeps_cold_fallback",
+        "tests/test_job_leases.py::test_japan_region_reaches_catalog_and_cold_launch",
+        "tests/test_job_leases.py::test_conflicting_confirmed_region_refuses_launch_before_lease",
+        "tests/test_prepared_storage.py::test_smart_launch_capacity_race_immediately_retries_cold",
     ),
     "redacted_support": (
         "tests/test_support_bundle.py::test_support_bundle_keeps_evidence_and_removes_payloads_and_secrets",

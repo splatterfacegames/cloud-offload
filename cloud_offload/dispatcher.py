@@ -463,6 +463,16 @@ class Dispatcher:
                 "The confirmed provider no longer matches the queued route.",
             )
             return None
+        try:
+            region_placement = self._launch_region_constraints(confirmations)
+        except ValueError as exc:
+            self._refuse_preflight_launch(queued_jobs, str(exc))
+            return None
+        region_arguments = {"placement": region_placement} if region_placement else {}
+        runtime_arguments = (
+            {"min_cuda_version": profile["min_cuda_version"]}
+            if profile.get("min_cuda_version") else {}
+        )
         placement_decision = None
         if confirmed and confirmed.get("prepared_volume_id"):
             placement_decision = self._confirmed_cache_placement(
@@ -539,6 +549,7 @@ class Dispatcher:
                             "max_hourly_rate", self.config.max_hourly_rate
                         )
                     ),
+                    **region_arguments,
                 )
             except Exception:
                 offers = []
@@ -565,6 +576,7 @@ class Dispatcher:
                 minimum_vram=minimum_vram,
                 cooling=cooling,
                 requirements=requirements,
+                region_placement=region_placement,
             )
             self._publish_launch_event(
                 queued_jobs,
@@ -598,6 +610,7 @@ class Dispatcher:
                 min_gpu_ram=minimum_vram,
                 max_hourly_rate=self.config.max_hourly_rate,
                 exclude=cooling,
+                **region_arguments,
             )
 
         if not offer:
@@ -669,6 +682,8 @@ class Dispatcher:
         }
         if profile.get("platform"):
             env_vars["CLOUD_OFFLOAD_WORKER_PLATFORM"] = profile["platform"]
+        if os.environ.get("CLOUD_OFFLOAD_BENCHMARK_MOUNT_CORRUPTION") == "1":
+            env_vars["CLOUD_OFFLOAD_BENCHMARK_MOUNT_CORRUPTION"] = "1"
         if profile.get("python_abi"):
             env_vars["CLOUD_OFFLOAD_WORKER_PYTHON_ABI"] = profile["python_abi"]
         if profile.get("weights"):
@@ -698,7 +713,15 @@ class Dispatcher:
             )
 
         placement = placement_decision.placement() if placement_decision else None
-        if placement and placement_decision and placement_decision.candidate:
+        if placement and region_placement and not set(placement.datacenter_ids).issubset(
+            region_placement.datacenter_ids
+        ):
+            self._refuse_preflight_launch(
+                queued_jobs, "The prepared placement is outside the allowed regions."
+            )
+            return None
+        placement = placement or region_placement
+        if placement and placement.storage_attachments and placement_decision and placement_decision.candidate:
             volume = placement_decision.candidate.volume
             selected_manifest_id = (
                 placement_decision.candidate.manifest_ids[0]
@@ -758,6 +781,7 @@ class Dispatcher:
                 startup_script=startup_script,
                 disk_gb=disk_gb,
                 resource_name=lease.resource_name,
+                **runtime_arguments,
             )
             if placement is not None:
                 launch_arguments["placement"] = placement
@@ -770,7 +794,7 @@ class Dispatcher:
                     "monotonic_ms": round(time.monotonic() * 1000, 3),
                     "provider": provider_name,
                     "offer_id": offer["id"],
-                    "placement": "cached" if placement is not None else "cold",
+                    "placement": "cached" if placement and placement.storage_attachments else "cold",
                 },
             )
             instance = connector.launch(**launch_arguments)
@@ -784,7 +808,7 @@ class Dispatcher:
                     "provider": provider_name,
                     "offer_id": offer["id"],
                     "worker_instance_id": instance.id,
-                    "placement": "cached" if placement is not None else "cold",
+                    "placement": "cached" if placement and placement.storage_attachments else "cold",
                 },
             )
             return self._remember_launched_instance(
@@ -802,7 +826,7 @@ class Dispatcher:
                     "provider": provider_name,
                     "offer_id": offer["id"],
                     "failure": str(e),
-                    "placement": "cached" if placement is not None else "cold",
+                    "placement": "cached" if placement and placement.storage_attachments else "cold",
                 },
             )
             logger.error(f"Failed to launch worker: {e}")
@@ -850,6 +874,7 @@ class Dispatcher:
                     min_gpu_ram=minimum_vram,
                     max_hourly_rate=self.config.max_hourly_rate,
                     exclude=cooling,
+                    **region_arguments,
                 )
                 if cold_offer:
                     cold_env = {
@@ -897,6 +922,8 @@ class Dispatcher:
                             startup_script=startup_script,
                             disk_gb=disk_gb,
                             resource_name=cold_lease.resource_name,
+                            **region_arguments,
+                            **runtime_arguments,
                         )
                         self._publish_launch_event(
                             queued_jobs,
@@ -1254,6 +1281,23 @@ class Dispatcher:
             if isinstance(item := job.params.get("preflight"), dict)
         ]
 
+    def _launch_region_constraints(
+        self, confirmations: list[dict]
+    ) -> PlacementConstraints | None:
+        """Carry the intersection of current policy and confirmed locality to launch."""
+        allowed = set(self.config.allowed_regions) or None
+        for confirmed in confirmations:
+            policy_regions = (confirmed.get("request_policy") or {}).get("allowed_regions") or []
+            region = confirmed.get("region")
+            constraints = [set(policy_regions)] if policy_regions else []
+            if region and region not in {"auto", "unknown"}:
+                constraints.append({region})
+            for regions in constraints:
+                allowed = regions if allowed is None else allowed & regions
+                if not allowed:
+                    raise ValueError("The confirmed region conflicts with the allowed regions.")
+        return PlacementConstraints(datacenter_ids=tuple(sorted(allowed))) if allowed else None
+
     def _confirmed_offers_allowed(
         self, confirmations: list[dict], offer: dict
     ) -> bool:
@@ -1502,9 +1546,11 @@ class Dispatcher:
         minimum_vram: int,
         cooling: set[str],
         requirements: dict,
+        region_placement: PlacementConstraints | None = None,
     ):
         policy = self.config.prepared_storage
         existing = policy.get("existing_volume_id")
+        region_arguments = {"placement": region_placement} if region_placement else {}
 
         def storage_failure(reason: str) -> PlacementDecision:
             if (
@@ -1517,6 +1563,7 @@ class Dispatcher:
                         gpu_type=gpu_type,
                         min_gpu_ram=minimum_vram,
                         max_hourly_rate=self.config.max_hourly_rate,
+                        **region_arguments,
                     )
                     if str(item.get("id")) not in cooling
                 ]
@@ -1579,6 +1626,8 @@ class Dispatcher:
             ]
             if not ready and not existing:
                 region = str(policy.get("region") or "auto")
+                if region_placement and region != "auto" and region not in region_placement.datacenter_ids:
+                    return storage_failure("managed_cache_region_outside_allowed_regions")
                 if region == "auto":
                     # RunPod's aggregate GPU-type API cannot prove a specific
                     # datacenter has capacity. Region auto therefore becomes an
@@ -1629,6 +1678,8 @@ class Dispatcher:
         cached: list[PlacementCandidate] = []
         for volume in self.cache_registry.list_volumes(status="ready"):
             if volume.provider != provider_name:
+                continue
+            if region_placement and volume.datacenter_id not in region_placement.datacenter_ids:
                 continue
             if policy.get("policy") == "pinned" and volume.datacenter_id != policy.get(
                 "region"
@@ -1684,6 +1735,7 @@ class Dispatcher:
                 gpu_type=gpu_type,
                 min_gpu_ram=minimum_vram,
                 max_hourly_rate=self.config.max_hourly_rate,
+                **region_arguments,
             )
             if str(offer.get("id")) not in cooling
         ]

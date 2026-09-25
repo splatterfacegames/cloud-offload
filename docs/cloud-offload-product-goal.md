@@ -1587,6 +1587,14 @@ All exits pass. The compact redacted evidence is in
 
 ### Milestone 7 — Production release gate
 
+The release scope for this campaign is RunPod Japan (`AP-JP-1`) on the
+H100 SXM 80 GB (`NVIDIA H100 80GB HBM3`), as agreed on 2026-09-08. Only this
+region and GPU are release targets; other regions do not require paid canaries
+for M7. Placement must remain in Japan, including cold fallback. If Japan has
+no eligible capacity, execution must wait or fail with an explanation rather
+than allocate in another region. Regional failure handling remains covered by
+contract tests without requiring another regional deployment.
+
 Cloud Offload graduates from beta only after:
 
 - thirty consecutive full canary matrices pass across supported images and

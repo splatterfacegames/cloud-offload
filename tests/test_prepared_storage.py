@@ -2953,10 +2953,10 @@ class PlacementProvider(CloudConnector):
     ):
         self.launches.append(placement)
         self.launch_environments.append(dict(env_vars or {}))
-        if placement and self.fail_cached:
+        if placement and placement.storage_attachments and self.fail_cached:
             raise PlacementError("cached datacenter capacity disappeared")
         return Instance(
-            "worker-cold" if not placement else "worker-cache",
+            "worker-cache" if placement and placement.storage_attachments else "worker-cold",
             "runpod",
             "GPU",
             1,
@@ -3094,15 +3094,18 @@ def test_explicit_region_creates_managed_storage_before_cached_offer(tmp_path):
     assert decision.placement().datacenter_ids == ("US-KS-2",)
 
 
-def test_smart_launch_capacity_race_immediately_retries_cold(tmp_path):
-    volume = ProviderStorage("vol-1", "runpod", "cache", 100, "US-KS-2", True)
-    config = dispatcher_config(tmp_path, policy())
+@pytest.mark.parametrize("allowed_regions", [[], ["AP-JP-1"]])
+def test_smart_launch_capacity_race_immediately_retries_cold(tmp_path, allowed_regions):
+    region = allowed_regions[0] if allowed_regions else "US-KS-2"
+    volume = ProviderStorage("vol-1", "runpod", "cache", 100, region, True)
+    config = dispatcher_config(tmp_path, policy(region=region))
+    config.allowed_regions = allowed_regions
     provider = PlacementProvider(volume=volume, fail_cached=True)
     dispatcher = Dispatcher(config, provider=provider)
     dispatcher.cache_registry.upsert_volume(
         provider="runpod",
         provider_volume_id="vol-1",
-        datacenter_id="US-KS-2",
+        datacenter_id=region,
         ownership="adopted",
         capacity_bytes=100,
         policy=config.prepared_storage,
@@ -3117,7 +3120,12 @@ def test_smart_launch_capacity_race_immediately_retries_cold(tmp_path):
     instance = dispatcher._launch_worker("runpod", "comfy", [job])
     assert instance and instance.id == "worker-cold"
     assert provider.launches[0] is not None
-    assert provider.launches[1] is None
+    if allowed_regions:
+        assert provider.launches[0].datacenter_ids == ("AP-JP-1",)
+        assert provider.launches[1].datacenter_ids == ("AP-JP-1",)
+        assert not provider.launches[1].storage_attachments
+    else:
+        assert provider.launches[1] is None
     assert "cache_manifest_id" not in dispatcher.queue.get(job.id).params
     event_types = [
         item["event"]["type"] for item in dispatcher.queue.list_events(job.id)

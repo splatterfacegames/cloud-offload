@@ -107,6 +107,7 @@ class CloudConnector(ABC):
         disk_gb: int | None = None,
         placement: PlacementConstraints | None = None,
         resource_name: str | None = None,
+        min_cuda_version: str | None = None,
     ) -> Instance:
         """Launch an instance with the given offer. Returns Instance object.
 

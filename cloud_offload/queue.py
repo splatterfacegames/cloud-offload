@@ -21,6 +21,16 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def _canonical_gpu_name(value: str | None) -> str:
+    name = str(value or "").lower().replace("_", " ").replace("-", " ")
+    # RunPod's catalog display name differs from the CUDA driver name for
+    # this card. Preserve specific GPU matching and the separate VRAM check.
+    return {
+        "h100 sxm": "nvidia h100 80gb hbm3",
+        "nvidia h100 sxm": "nvidia h100 80gb hbm3",
+    }.get(name, name)
+
+
 # What a worker may report about itself. ``starting`` is a runner that has told
 # the coordinator it exists but is still bringing ComfyUI up, and ``failed`` is
 # one that never managed to; only the first two are a worker the dispatcher can
@@ -2027,13 +2037,14 @@ class JobQueue:
             if gpu_name:
                 # Treat "any"/missing as unconstrained. Normalizing separators makes
                 # provider labels such as RTX_4090 match NVIDIA GeForce RTX 4090.
+                conn.create_function("canonical_gpu_name", 1, _canonical_gpu_name, deterministic=True)
                 gpu_clause += """
                     AND (
                         COALESCE(lower(json_extract(params, '$.gpu_type')), 'any') = 'any'
-                        OR replace(replace(lower(?), '_', ' '), '-', ' ')
-                           LIKE '%' || replace(replace(
-                               lower(json_extract(params, '$.gpu_type')), '_', ' '
-                           ), '-', ' ') || '%'
+                        OR canonical_gpu_name(?)
+                           LIKE '%' || canonical_gpu_name(
+                               json_extract(params, '$.gpu_type')
+                           ) || '%'
                     )
                 """
                 values.append(str(gpu_name))
@@ -2510,9 +2521,26 @@ class JobQueue:
                 """,
                 parameters,
             ).fetchall()
+            lease_rows = conn.execute(
+                """
+                SELECT worker_id, provider, instance_id, id
+                FROM job_leases
+                WHERE status = 'active' AND worker_id IS NOT NULL
+                  AND instance_id IS NOT NULL
+                """
+            ).fetchall()
+        # Publish only an unambiguous, currently active durable lease binding.
+        bindings: dict[tuple[str, str], list[tuple[str, str]]] = {}
+        for worker_id, provider, instance_id, lease_id in lease_rows:
+            bindings.setdefault((worker_id, provider), []).append((instance_id, lease_id))
+        identities = {
+            key: {"instance_id": values[0][0], "lease_id": values[0][1]}
+            for key, values in bindings.items() if len(values) == 1
+        }
         now = utc_now()
         return [
             {
+                **identities.get((row[0], row[1]), {}),
                 "worker_id": row[0],
                 "provider": row[1],
                 "status": row[2],
